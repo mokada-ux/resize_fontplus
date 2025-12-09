@@ -119,4 +119,63 @@ current_font_path = None
 
 # フォルダチェックとセレクトボックス表示
 if os.path.exists(FONT_DIR):
-    available_fonts = [f for f in os.listdir(FONT_DIR) if f
+    available_fonts = [f for f in os.listdir(FONT_DIR) if f.endswith(('.ttf', '.otf'))]
+    if available_fonts:
+        selected_font_name = st.sidebar.selectbox("フォント選択", available_fonts)
+        current_font_path = os.path.join(FONT_DIR, selected_font_name)
+    else:
+        st.sidebar.warning(f"⚠️ '{FONT_DIR}' フォルダ内には.ttfファイルがありません。")
+else:
+    # フォルダがない場合は警告せず、デフォルト動作にする（または警告を出しても良い）
+    st.sidebar.info(f"💡 プロジェクト内に '{FONT_DIR}' フォルダを作って .ttf ファイルを入れるとフォントを選べます。")
+
+
+# 3. メインコンテンツ (画像アップロードと処理)
+uploaded_file = st.file_uploader("ここに画像をドラッグ＆ドロップ", type=['jpg', 'jpeg', 'png'])
+
+if uploaded_file is not None:
+    # 画像を開く
+    image = Image.open(uploaded_file)
+    st.image(image, caption="元の画像", width=400)
+    st.divider()
+    
+    st.subheader("👇 変換結果")
+    
+    # 出力サイズ設定
+    targets = [
+        (1080, 1080, "正方形 (1:1)"),
+        (1920, 1080, "横長 (16:9)"),
+        (600, 400, "バナー (3:2)")
+    ]
+
+    cols = st.columns(3)
+    
+    for i, (w, h, label) in enumerate(targets):
+        # A. リサイズ
+        resized_img = smart_resize(image, w, h)
+        
+        # B. 文字入れ (選択されたフォントを使用)
+        final_img = add_text_to_image(
+            resized_img, 
+            text_input, 
+            current_font_path, 
+            font_size, 
+            text_color, 
+            text_position
+        )
+        
+        # C. 表示とダウンロード
+        with cols[i]:
+            st.write(f"**{label}** ({w}x{h})")
+            st.image(final_img, use_container_width=True)
+            
+            buf = io.BytesIO()
+            final_img.save(buf, format="JPEG", quality=95)
+            byte_im = buf.getvalue()
+            
+            st.download_button(
+                label=f"📥 保存 ({w}x{h})",
+                data=byte_im,
+                file_name=f"resized_text_{w}x{h}.jpg",
+                mime="image/jpeg"
+            )
