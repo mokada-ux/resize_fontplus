@@ -4,13 +4,18 @@ import cv2
 import numpy as np
 import io
 import os
-import math # 角度計算用
+import math
 
 # --- 1. 画像処理関数 ---
 
 def smart_resize(img_pil, target_width, target_height):
     """顔認識をしてリサイズする関数"""
+    # 処理のためにRGBに変換しておく（OpenCV用）
+    if img_pil.mode != 'RGB':
+        img_pil = img_pil.convert('RGB')
+        
     img_np = np.array(img_pil)
+    # OpenCVはBGR配列
     img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
     orig_h, orig_w = img_cv.shape[:2]
 
@@ -58,6 +63,7 @@ def add_text_layer(img, settings):
     if not text:
         return img
 
+    # 文字入れ処理のためにRGBA変換
     img = img.convert("RGBA")
     W, H = img.size
 
@@ -79,7 +85,6 @@ def add_text_layer(img, settings):
         display_text = "\n".join(list(text))
 
     # --- サイズ計測 ---
-    # ダミー描画でサイズを測る
     dummy_draw = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     outline_width = settings['outline_width']
     try:
@@ -115,13 +120,10 @@ def add_text_layer(img, settings):
     final_y = base_y + settings['offset_y']
 
     # --- レイヤー作成 ---
-    # 1. 影レイヤー (ぼかし処理のため独立させる)
     shadow_layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
     
     if settings['shadow_enabled']:
         s_draw = ImageDraw.Draw(shadow_layer)
-        
-        # 角度と距離から座標を計算
         angle_rad = math.radians(settings['shadow_angle'])
         s_off_x = settings['shadow_dist'] * math.cos(angle_rad)
         s_off_y = settings['shadow_dist'] * math.sin(angle_rad)
@@ -137,15 +139,12 @@ def add_text_layer(img, settings):
             align="center" if settings['is_vertical'] else "left"
         )
         
-        # ぼかし処理
         if settings['shadow_blur'] > 0:
             shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(settings['shadow_blur']))
 
-    # 2. テキスト・帯レイヤー
     text_layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
     t_draw = ImageDraw.Draw(text_layer)
 
-    # 帯の描画
     if settings['band_enabled']:
         bp = settings['band_padding']
         bx1, by1 = final_x - bp, final_y - bp
@@ -154,7 +153,6 @@ def add_text_layer(img, settings):
         band_fill = (r, g, b, int(255 * (settings['band_opacity'] / 100)))
         t_draw.rectangle([bx1, by1, bx2, by2], fill=band_fill)
 
-    # 文字描画
     t_draw.text(
         (final_x, final_y), 
         display_text, 
@@ -165,7 +163,6 @@ def add_text_layer(img, settings):
         align="center" if settings['is_vertical'] else "left"
     )
 
-    # 合成順: 背景 -> 影 -> 文字
     combined = Image.alpha_composite(img, shadow_layer)
     combined = Image.alpha_composite(combined, text_layer)
     
@@ -175,14 +172,10 @@ def add_text_layer(img, settings):
 # --- 2. UIコンポーネント関数 ---
 
 def render_text_settings_ui(unique_key_prefix, available_fonts, FONT_DIR, defaults=None):
-    """
-    テキスト設定UIを表示する
-    defaults: 初期値として使う設定辞書のリスト（コピー元データ）
-    """
+    """テキスト設定UIを表示する"""
     settings_list = []
     
-    for i in range(3): # テキスト1〜3
-        # デフォルト値の取得ヘルパー
+    for i in range(3):
         def get_def(key, fallback):
             if defaults and i < len(defaults):
                 return defaults[i].get(key, fallback)
@@ -190,11 +183,8 @@ def render_text_settings_ui(unique_key_prefix, available_fonts, FONT_DIR, defaul
 
         with st.expander(f"テキスト {i+1}", expanded=(i==0)):
             uid = f"{unique_key_prefix}_{i}"
-            
-            # 初期値にdefaultsを使うことで「設定の引継ぎ」を実現
             content = st.text_input("文字", value=get_def('text', ""), key=f"tx_{uid}")
             
-            # --- 基本デザイン ---
             col1, col2 = st.columns(2)
             with col1:
                 size_pct = st.slider("サイズ(%)", 1, 50, get_def('size_percent', 10), key=f"sz_{uid}")
@@ -210,10 +200,8 @@ def render_text_settings_ui(unique_key_prefix, available_fonts, FONT_DIR, defaul
             with col2:
                 is_vert = st.checkbox("縦書き", get_def('is_vertical', False), key=f"vt_{uid}")
                 
-                # フォント選択のインデックス計算
                 font_idx = 0
                 default_path = get_def('font_path', None)
-                # パスからファイル名を抽出してリストと照合
                 if default_path and available_fonts:
                     fname = os.path.basename(default_path)
                     if fname in available_fonts:
@@ -224,14 +212,12 @@ def render_text_settings_ui(unique_key_prefix, available_fonts, FONT_DIR, defaul
                 if available_fonts:
                     font_name = st.selectbox("フォント", available_fonts, index=font_idx, key=f"ft_{uid}")
                     font_path = os.path.join(FONT_DIR, font_name)
-                
-            # --- 位置スライダー ---
+            
             st.markdown("###### 位置微調整 (px)")
             c_ox, c_oy = st.columns(2)
             off_x = c_ox.slider("↔ 横ズレ", -400, 400, get_def('offset_x', 0), step=5, key=f"ox_{uid}")
             off_y = c_oy.slider("↕ 縦ズレ", -400, 400, get_def('offset_y', 0), step=5, key=f"oy_{uid}")
 
-            # --- 詳細設定タブ ---
             t_edge, t_shadow, t_band = st.tabs(["フチ", "影", "帯"])
             
             with t_edge:
@@ -260,7 +246,6 @@ def render_text_settings_ui(unique_key_prefix, available_fonts, FONT_DIR, defaul
                 else:
                     b_col, b_op, b_pad = "#000000", 0, 0
 
-            # 設定を保存
             settings_list.append({
                 "text": content,
                 "size_percent": size_pct,
@@ -303,41 +288,30 @@ TARGET_SPECS = [
 ]
 
 st.sidebar.header("🎨 デザイン編集")
-
-# タブ定義
 tab_sq, tab_wd, tab_bn = st.sidebar.tabs(["Square (基準)", "Wide", "Banner"])
 
-# --- 1. Square設定 (マスター) ---
 with tab_sq:
     st.subheader("🔲 Square (1080x1080)")
-    # デフォルトなしで作成
     square_configs = render_text_settings_ui("sq", available_fonts, FONT_DIR)
 
-# --- 2. Wide設定 ---
 with tab_wd:
     st.subheader("📺 Wide (1920x1080)")
-    # 状態管理セッションの初期化は省略し、チェックボックスで制御
     use_sq_for_wd = st.checkbox("🔗 Squareの設定をコピー", value=True, key="sync_wd")
-    
     if use_sq_for_wd:
         st.info("Squareの設定を適用中。個別に変更したい場合はチェックを外してください。")
-        wide_configs = square_configs # そのまま参照
+        wide_configs = square_configs
     else:
-        # チェックを外した瞬間、square_configsを「初期値」として渡す
         wide_configs = render_text_settings_ui("wd", available_fonts, FONT_DIR, defaults=square_configs)
 
-# --- 3. Banner設定 ---
 with tab_bn:
     st.subheader("🏷️ Banner (600x400)")
     use_sq_for_bn = st.checkbox("🔗 Squareの設定をコピー", value=True, key="sync_bn")
-    
     if use_sq_for_bn:
         st.info("Squareの設定を適用中。個別に変更したい場合はチェックを外してください。")
         banner_configs = square_configs
     else:
         banner_configs = render_text_settings_ui("bn", available_fonts, FONT_DIR, defaults=square_configs)
 
-# 全設定まとめ
 all_format_configs = {
     "Square": square_configs,
     "Wide": wide_configs,
@@ -349,6 +323,7 @@ all_format_configs = {
 uploaded_file = st.file_uploader("画像をアップロード", type=['jpg', 'jpeg', 'png'])
 
 if uploaded_file is not None:
+    # 画像を開くときは一旦RGBAなど元の形式で開くが、smart_resizeでRGB化する
     image = Image.open(uploaded_file)
     st.image(image, caption="元の画像", width=400)
     st.divider()
@@ -358,7 +333,6 @@ if uploaded_file is not None:
     for idx, (w, h, label_key) in enumerate(TARGET_SPECS):
         processed_img = smart_resize(image, w, h)
         
-        # 設定に基づいて描画
         current_texts = all_format_configs[label_key]
         for settings in current_texts:
             if settings['text']: 
@@ -367,6 +341,11 @@ if uploaded_file is not None:
         with cols[idx]:
             st.write(f"**{label_key}** ({w}x{h})")
             st.image(processed_img, use_container_width=True)
+
+            # ★ここを修正しました★
+            # JPEG保存前に必ずRGBモードに変換する（透過PNG対応）
+            if processed_img.mode in ("RGBA", "P"):
+                processed_img = processed_img.convert("RGB")
 
             buf = io.BytesIO()
             processed_img.save(buf, format="JPEG", quality=95)
