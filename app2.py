@@ -47,13 +47,24 @@ def smart_resize(img_pil, target_width, target_height):
     final_img = img_resized.crop((left, top, left + target_width, top + target_height))
     return final_img
 
-def add_text_to_image(img, text, font_path, font_size, color, position):
-    """画像に文字を追加する関数"""
+def hex_to_rgb(hex_color):
+    """HEX色コードを(r, g, b)タプルに変換"""
+    hex_color = hex_color.lstrip('#')
+    return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+
+def add_text_advanced(img, text, font_path, font_size, text_color, 
+                      is_vertical, outline_width, outline_color, 
+                      band_enabled, band_color, band_opacity, band_padding,
+                      position_preset, offset_x, offset_y):
+    """高度な文字入れ関数"""
     if not text:
         return img
 
-    img_with_text = img.copy()
-    draw = ImageDraw.Draw(img_with_text)
+    # 画像をRGBAモードに変換（透過処理のため）
+    img_rgba = img.convert("RGBA")
+    # 文字描画用の透明レイヤーを作成
+    txt_layer = Image.new("RGBA", img_rgba.size, (255, 255, 255, 0))
+    draw = ImageDraw.Draw(txt_layer)
     W, H = img.size
 
     # フォント設定
@@ -64,84 +75,144 @@ def add_text_to_image(img, text, font_path, font_size, color, position):
             font = ImageFont.load_default()
     except Exception:
         font = ImageFont.load_default()
-    
+
+    # 縦書き対応（簡易版：改行を入れる）
+    display_text = text
+    if is_vertical:
+        display_text = "\n".join(list(text))
+
     # テキストサイズ取得
     try:
-        bbox = draw.textbbox((0, 0), text, font=font)
+        bbox = draw.textbbox((0, 0), display_text, font=font, stroke_width=outline_width)
         text_w = bbox[2] - bbox[0]
         text_h = bbox[3] - bbox[1]
     except AttributeError:
-        # 古いPillowバージョンの場合のフォールバック
-        text_w, text_h = draw.textsize(text, font=font)
+        # 古いPillow用
+        text_w, text_h = draw.textsize(display_text, font=font)
 
-    # 位置計算
-    x, y = 0, 0
-    padding = 20
+    # 基準位置の計算
+    base_x, base_y = 0, 0
+    padding = 20 # 画面端からの余裕
 
-    if position == "中央":
-        x = (W - text_w) / 2
-        y = (H - text_h) / 2
-    elif position == "左上":
-        x = padding
-        y = padding
-    elif position == "左下":
-        x = padding
-        y = H - text_h - padding
-    elif position == "右上":
-        x = W - text_w - padding
-        y = padding
-    elif position == "右下":
-        x = W - text_w - padding
-        y = H - text_h - padding
+    if position_preset == "中央":
+        base_x = (W - text_w) / 2
+        base_y = (H - text_h) / 2
+    elif position_preset == "左上":
+        base_x = padding
+        base_y = padding
+    elif position_preset == "左下":
+        base_x = padding
+        base_y = H - text_h - padding
+    elif position_preset == "右上":
+        base_x = W - text_w - padding
+        base_y = padding
+    elif position_preset == "右下":
+        base_x = W - text_w - padding
+        base_y = H - text_h - padding
 
-    # 描画
-    draw.text((x, y), text, fill=color, font=font)
-    return img_with_text
+    # 微調整を適用
+    final_x = base_x + offset_x
+    final_y = base_y + offset_y
+
+    # --- 帯（背景）の描画 ---
+    if band_enabled:
+        # 帯の座標計算（文字サイズ + 余白）
+        # もし「画面幅いっぱいの帯」にしたい場合はここを調整しますが、今回は「文字の背景」とします
+        bx1 = final_x - band_padding
+        by1 = final_y - band_padding
+        bx2 = final_x + text_w + band_padding
+        by2 = final_y + text_h + band_padding
+        
+        # 帯の色設定 (RGBA)
+        r, g, b = hex_to_rgb(band_color)
+        band_fill = (r, g, b, int(255 * (band_opacity / 100)))
+        
+        # 帯を描画
+        draw.rectangle([bx1, by1, bx2, by2], fill=band_fill)
+
+    # --- 文字の描画 ---
+    # 縁取り付きで描画
+    draw.text(
+        (final_x, final_y), 
+        display_text, 
+        font=font, 
+        fill=text_color, 
+        stroke_width=outline_width, 
+        stroke_fill=outline_color,
+        align="center" if is_vertical else "left"
+    )
+
+    # 元画像とテキストレイヤーを合成
+    combined = Image.alpha_composite(img_rgba, txt_layer)
+    return combined.convert("RGB") # JPEG保存用にRGBに戻す
 
 
 # --- アプリのメイン処理 ---
 
-# 1. ページ設定 (これは必ず一番最初に実行する必要がある)
-st.set_page_config(page_title="簡単リサイズ＆文字入れ", layout="wide")
-st.title("📷 AI自動リサイズ & 文字入れ")
-st.markdown("画像をアップロードすると、人物を中心にトリミングし、文字を追加します。")
+st.set_page_config(page_title="高機能リサイズ＆文字入れ", layout="wide")
+st.title("📷 AI自動リサイズ & プロ仕様文字入れ")
 
-# 2. サイドバー設定 (文字やフォントの設定)
-st.sidebar.header("🎨 文字設定")
-text_input = st.sidebar.text_input("追加する文字", "")
-text_color = st.sidebar.color_picker("文字色", "#FFFFFF")
-font_size = st.sidebar.slider("フォントサイズ (px)", 10, 200, 50)
-text_position = st.sidebar.selectbox("文字の位置", ["中央", "右下", "左下", "右上", "左上"], index=1)
+# --- サイドバー設定 ---
 
-# フォント選択機能
-FONT_DIR = "fonts"  # フォントを入れるフォルダ名
-current_font_path = None
+with st.sidebar:
+    st.header("📝 テキスト入力")
+    text_input = st.text_area("追加する文字", "Sale\n50% OFF", height=70)
+    is_vertical = st.checkbox("縦書きモード (日本語推奨)")
 
-# フォルダチェックとセレクトボックス表示
-if os.path.exists(FONT_DIR):
-    available_fonts = [f for f in os.listdir(FONT_DIR) if f.endswith(('.ttf', '.otf'))]
-    if available_fonts:
-        selected_font_name = st.sidebar.selectbox("フォント選択", available_fonts)
-        current_font_path = os.path.join(FONT_DIR, selected_font_name)
-    else:
-        st.sidebar.warning(f"⚠️ '{FONT_DIR}' フォルダ内には.ttfファイルがありません。")
-else:
-    # フォルダがない場合は警告せず、デフォルト動作にする（または警告を出しても良い）
-    st.sidebar.info(f"💡 プロジェクト内に '{FONT_DIR}' フォルダを作って .ttf ファイルを入れるとフォントを選べます。")
+    # フォント選択
+    FONT_DIR = "fonts"
+    current_font_path = None
+    if os.path.exists(FONT_DIR):
+        available_fonts = [f for f in os.listdir(FONT_DIR) if f.endswith(('.ttf', '.otf'))]
+        if available_fonts:
+            selected_font_name = st.selectbox("フォント選択", available_fonts)
+            current_font_path = os.path.join(FONT_DIR, selected_font_name)
+        else:
+            st.warning("fontsフォルダにファイルがありません")
+    
+    st.divider()
 
+    # タブで設定を整理
+    tab1, tab2, tab3 = st.tabs(["🎨 デザイン", "🔲 帯・背景", "📐 配置・微調整"])
 
-# 3. メインコンテンツ (画像アップロードと処理)
-uploaded_file = st.file_uploader("ここに画像をドラッグ＆ドロップ", type=['jpg', 'jpeg', 'png'])
+    with tab1:
+        st.subheader("文字デザイン")
+        font_size = st.slider("サイズ", 10, 200, 60)
+        text_color = st.color_picker("文字色", "#FFFFFF")
+        
+        st.subheader("境界線 (フチ)")
+        outline_width = st.slider("フチの太さ", 0, 10, 2)
+        outline_color = st.color_picker("フチの色", "#000000")
+
+    with tab2:
+        st.subheader("背景の帯")
+        band_enabled = st.toggle("文字の背景に帯をつける", value=False)
+        band_color = st.color_picker("帯の色", "#FF0000")
+        band_opacity = st.slider("帯の不透明度 (%)", 0, 100, 70)
+        band_padding = st.slider("帯の広さ (パディング)", 0, 100, 20)
+
+    with tab3:
+        st.subheader("位置設定")
+        position_preset = st.selectbox("基本位置", ["中央", "右下", "左下", "右上", "左上"], index=0)
+        
+        st.caption("微調整 (ピクセル)")
+        col_x, col_y = st.columns(2)
+        with col_x:
+            offset_x = st.number_input("横方向 (X)", value=0, step=10)
+        with col_y:
+            offset_y = st.number_input("縦方向 (Y)", value=0, step=10)
+            
+# --- メイン画面処理 ---
+
+uploaded_file = st.file_uploader("画像をアップロード", type=['jpg', 'jpeg', 'png'])
 
 if uploaded_file is not None:
-    # 画像を開く
     image = Image.open(uploaded_file)
     st.image(image, caption="元の画像", width=400)
     st.divider()
     
-    st.subheader("👇 変換結果")
+    st.subheader("👇 仕上がりプレビュー")
     
-    # 出力サイズ設定
     targets = [
         (1080, 1080, "正方形 (1:1)"),
         (1920, 1080, "横長 (16:9)"),
@@ -151,22 +222,31 @@ if uploaded_file is not None:
     cols = st.columns(3)
     
     for i, (w, h, label) in enumerate(targets):
-        # A. リサイズ
+        # 1. リサイズ
         resized_img = smart_resize(image, w, h)
         
-        # B. 文字入れ (選択されたフォントを使用)
-        final_img = add_text_to_image(
+        # 2. 高度な文字入れ
+        final_img = add_text_advanced(
             resized_img, 
             text_input, 
             current_font_path, 
             font_size, 
-            text_color, 
-            text_position
+            text_color,
+            is_vertical,
+            outline_width,
+            outline_color,
+            band_enabled,
+            band_color,
+            band_opacity,
+            band_padding,
+            position_preset,
+            offset_x,
+            offset_y
         )
         
-        # C. 表示とダウンロード
+        # 3. 表示とダウンロード
         with cols[i]:
-            st.write(f"**{label}** ({w}x{h})")
+            st.write(f"**{label}**")
             st.image(final_img, use_container_width=True)
             
             buf = io.BytesIO()
@@ -174,8 +254,9 @@ if uploaded_file is not None:
             byte_im = buf.getvalue()
             
             st.download_button(
-                label=f"📥 保存 ({w}x{h})",
+                label=f"📥 保存",
                 data=byte_im,
-                file_name=f"resized_text_{w}x{h}.jpg",
-                mime="image/jpeg"
+                file_name=f"processed_{w}x{h}.jpg",
+                mime="image/jpeg",
+                key=f"dl_{i}"
             )
