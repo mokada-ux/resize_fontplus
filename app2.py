@@ -8,9 +8,14 @@ import math
 
 # --- 1. 画像処理関数 ---
 
-def smart_resize(img_pil, target_width, target_height):
-    """顔認識をしてリサイズする関数"""
-    # 処理のためにRGBに変換しておく（OpenCV用）
+def smart_resize(img_pil, target_width, target_height, zoom=1.0, shift_x=0, shift_y=0):
+    """
+    顔認識 + 手動補正をしてリサイズする関数
+    zoom: 拡大率 (1.0 = 自動フィット)
+    shift_x: 横方向の移動ピクセル (プラスで右へ移動)
+    shift_y: 縦方向の移動ピクセル (プラスで下へ移動)
+    """
+    # 処理のためにRGBに変換しておく
     if img_pil.mode != 'RGB':
         img_pil = img_pil.convert('RGB')
         
@@ -19,6 +24,7 @@ def smart_resize(img_pil, target_width, target_height):
     img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
     orig_h, orig_w = img_cv.shape[:2]
 
+    # --- 顔認識処理 ---
     try:
         cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
         face_cascade = cv2.CascadeClassifier(cascade_path)
@@ -27,6 +33,7 @@ def smart_resize(img_pil, target_width, target_height):
     except Exception:
         faces = []
 
+    # デフォルトの中心位置（顔が見つからない場合は画像の中心）
     center_x, center_y = orig_w / 2, orig_h / 2
     
     if len(faces) > 0:
@@ -37,21 +44,46 @@ def smart_resize(img_pil, target_width, target_height):
         center_x = (min_x + max_x) / 2
         center_y = (min_y + max_y) / 2
 
-    scale = max(target_width / orig_w, target_height / orig_h)
-    resized_w, resized_h = int(orig_w * scale), int(orig_h * scale)
+    # --- スケール計算 ---
+    # ターゲット領域を埋めるための最小倍率を計算
+    base_scale = max(target_width / orig_w, target_height / orig_h)
     
+    # 手動ズームを適用
+    final_scale = base_scale * zoom
+    
+    resized_w, resized_h = int(orig_w * final_scale), int(orig_h * final_scale)
+    
+    # 画像リサイズ
     img_resized = img_pil.resize((resized_w, resized_h), Image.LANCZOS)
     
-    center_x_scaled = center_x * scale
-    center_y_scaled = center_y * scale
-    left = center_x_scaled - (target_width / 2)
-    top = center_y_scaled - (target_height / 2)
+    # --- 切り抜き位置の計算 ---
+    # リサイズ後の画像内での中心位置
+    center_x_scaled = center_x * final_scale
+    center_y_scaled = center_y * final_scale
     
-    left = max(0, min(left, resized_w - target_width))
-    top = max(0, min(top, resized_h - target_height))
+    # 切り抜き枠の左上座標（顔中心を基準に、ターゲットサイズの半分戻る）
+    # 手動シフト量を反映（画像が右に動く＝切り抜き枠は左に動く）
+    left = center_x_scaled - (target_width / 2) - shift_x
+    top = center_y_scaled - (target_height / 2) - shift_y
     
-    final_img = img_resized.crop((left, top, left + target_width, top + target_height))
-    return final_img
+    # --- はみ出し防止処理（オプション：余白を許容するかどうか）---
+    # ここでは「画像が足りない部分は黒埋め」ではなく、可能な限り画像を埋める挙動にするが、
+    # ユーザーが自由に動かしたい場合は制限を緩める必要がある。
+    # 今回は「制限なし」で自由に動かせるようにclamp処理を少し緩める、あるいは外す。
+    # ただしPILのcropは範囲外を指定すると自動でパディングはしないため、貼り付け方式に変更。
+    
+    # 背景キャンバスを作成（黒背景）
+    canvas = Image.new("RGB", (target_width, target_height), (0, 0, 0))
+    
+    # 貼り付け位置の計算（crop座標の逆）
+    paste_x = int(-left)
+    paste_y = int(-top)
+    
+    # キャンバスにリサイズ画像を貼り付け
+    # 画像の一部しかキャンバスに乗らない場合も考慮してpaste
+    canvas.paste(img_resized, (paste_x, paste_y))
+    
+    return canvas
 
 def hex_to_rgb(hex_color):
     hex_color = hex_color.lstrip('#')
@@ -171,6 +203,21 @@ def add_text_layer(img, settings):
 
 # --- 2. UIコンポーネント関数 ---
 
+def render_image_adjust_ui(unique_key):
+    """画像の位置・サイズ調整UIを表示し、設定値を返す"""
+    with st.expander("🖼️ 画像位置・サイズ調整", expanded=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            zoom = st.slider("🔍 拡大/縮小", 0.5, 3.0, 1.0, 0.1, key=f"zoom_{unique_key}")
+        with col2:
+            st.write("位置微調整")
+        
+        c_x, c_y = st.columns(2)
+        shift_x = c_x.slider("↔ 左右移動", -500, 500, 0, 10, key=f"sx_{unique_key}")
+        shift_y = c_y.slider("↕ 上下移動", -500, 500, 0, 10, key=f"sy_{unique_key}")
+        
+    return {"zoom": zoom, "shift_x": shift_x, "shift_y": shift_y}
+
 def render_text_settings_ui(unique_key_prefix, available_fonts, FONT_DIR, defaults=None):
     """テキスト設定UIを表示する"""
     settings_list = []
@@ -181,7 +228,7 @@ def render_text_settings_ui(unique_key_prefix, available_fonts, FONT_DIR, defaul
                 return defaults[i].get(key, fallback)
             return fallback
 
-        with st.expander(f"テキスト {i+1}", expanded=(i==0)):
+        with st.expander(f"📝 テキスト {i+1}", expanded=(i==0)):
             uid = f"{unique_key_prefix}_{i}"
             content = st.text_input("文字", value=get_def('text', ""), key=f"tx_{uid}")
             
@@ -279,81 +326,4 @@ st.title("📷 AIリサイズ & プロ仕様デザイン")
 FONT_DIR = "fonts"
 available_fonts = []
 if os.path.exists(FONT_DIR):
-    available_fonts = [f for f in os.listdir(FONT_DIR) if f.endswith(('.ttf', '.otf'))]
-
-TARGET_SPECS = [
-    (1080, 1080, "Square"),
-    (1200, 628, "Wide"),
-    (600, 400, "Banner")
-]
-
-st.sidebar.header("🎨 デザイン編集")
-tab_sq, tab_wd, tab_bn = st.sidebar.tabs(["Square (基準)", "Wide", "Banner"])
-
-with tab_sq:
-    st.subheader("🔲 Square (1080x1080)")
-    square_configs = render_text_settings_ui("sq", available_fonts, FONT_DIR)
-
-with tab_wd:
-    st.subheader("📺 Wide (1200x628)")
-    use_sq_for_wd = st.checkbox("🔗 Squareの設定をコピー", value=True, key="sync_wd")
-    if use_sq_for_wd:
-        st.info("Squareの設定を適用中。個別に変更したい場合はチェックを外してください。")
-        wide_configs = square_configs
-    else:
-        wide_configs = render_text_settings_ui("wd", available_fonts, FONT_DIR, defaults=square_configs)
-
-with tab_bn:
-    st.subheader("🏷️ Banner (600x400)")
-    use_sq_for_bn = st.checkbox("🔗 Squareの設定をコピー", value=True, key="sync_bn")
-    if use_sq_for_bn:
-        st.info("Squareの設定を適用中。個別に変更したい場合はチェックを外してください。")
-        banner_configs = square_configs
-    else:
-        banner_configs = render_text_settings_ui("bn", available_fonts, FONT_DIR, defaults=square_configs)
-
-all_format_configs = {
-    "Square": square_configs,
-    "Wide": wide_configs,
-    "Banner": banner_configs
-}
-
-# --- 4. 画像生成処理 ---
-
-uploaded_file = st.file_uploader("画像をアップロード", type=['jpg', 'jpeg', 'png'])
-
-if uploaded_file is not None:
-    # 画像を開くときは一旦RGBAなど元の形式で開くが、smart_resizeでRGB化する
-    image = Image.open(uploaded_file)
-    st.image(image, caption="元の画像", width=400)
-    st.divider()
-
-    cols = st.columns(len(TARGET_SPECS))
-
-    for idx, (w, h, label_key) in enumerate(TARGET_SPECS):
-        processed_img = smart_resize(image, w, h)
-        
-        current_texts = all_format_configs[label_key]
-        for settings in current_texts:
-            if settings['text']: 
-                processed_img = add_text_layer(processed_img, settings)
-
-        with cols[idx]:
-            st.write(f"**{label_key}** ({w}x{h})")
-            st.image(processed_img, use_container_width=True)
-
-            # ★ここを修正しました★
-            # JPEG保存前に必ずRGBモードに変換する（透過PNG対応）
-            if processed_img.mode in ("RGBA", "P"):
-                processed_img = processed_img.convert("RGB")
-
-            buf = io.BytesIO()
-            processed_img.save(buf, format="JPEG", quality=95)
-            
-            st.download_button(
-                label="📥 保存",
-                data=buf.getvalue(),
-                file_name=f"{label_key}_{w}x{h}.jpg",
-                mime="image/jpeg",
-                key=f"dl_{idx}"
-            )
+    available_fonts = [f for f in os.listdir(FONT_DIR) if f.endswith(('.ttf',
