@@ -326,4 +326,106 @@ st.title("📷 AIリサイズ & プロ仕様デザイン")
 FONT_DIR = "fonts"
 available_fonts = []
 if os.path.exists(FONT_DIR):
-    available_fonts = [f for f in os.listdir(FONT_DIR) if f.endswith(('.ttf',
+    available_fonts = [f for f in os.listdir(FONT_DIR) if f.endswith(('.ttf', '.otf'))]
+
+TARGET_SPECS = [
+    (1080, 1080, "Square"),
+    (1200, 628, "Wide"),
+    (600, 400, "Banner")
+]
+
+st.sidebar.header("🎨 デザイン編集")
+tab_sq, tab_wd, tab_bn = st.sidebar.tabs(["Square (基準)", "Wide", "Banner"])
+
+# --- 設定変数の初期化 ---
+square_img_adj = {}
+wide_img_adj = {}
+banner_img_adj = {}
+
+with tab_sq:
+    st.subheader("🔲 Square (1080x1080)")
+    # 画像調整UI
+    square_img_adj = render_image_adjust_ui("sq")
+    st.divider()
+    # テキスト設定UI
+    square_configs = render_text_settings_ui("sq", available_fonts, FONT_DIR)
+
+with tab_wd:
+    st.subheader("📺 Wide (1200x628)")
+    use_sq_for_wd = st.checkbox("🔗 Squareの設定をコピー", value=True, key="sync_wd")
+    if use_sq_for_wd:
+        st.info("Squareの設定を適用中。個別に変更したい場合はチェックを外してください。")
+        wide_configs = square_configs
+        wide_img_adj = square_img_adj
+    else:
+        wide_img_adj = render_image_adjust_ui("wd")
+        st.divider()
+        wide_configs = render_text_settings_ui("wd", available_fonts, FONT_DIR, defaults=square_configs)
+
+with tab_bn:
+    st.subheader("🏷️ Banner (600x400)")
+    use_sq_for_bn = st.checkbox("🔗 Squareの設定をコピー", value=True, key="sync_bn")
+    if use_sq_for_bn:
+        st.info("Squareの設定を適用中。個別に変更したい場合はチェックを外してください。")
+        banner_configs = square_configs
+        banner_img_adj = square_img_adj
+    else:
+        banner_img_adj = render_image_adjust_ui("bn")
+        st.divider()
+        banner_configs = render_text_settings_ui("bn", available_fonts, FONT_DIR, defaults=square_configs)
+
+all_format_configs = {
+    "Square": {"text": square_configs, "img": square_img_adj},
+    "Wide": {"text": wide_configs, "img": wide_img_adj},
+    "Banner": {"text": banner_configs, "img": banner_img_adj}
+}
+
+# --- 4. 画像生成処理 ---
+
+uploaded_file = st.file_uploader("画像をアップロード", type=['jpg', 'jpeg', 'png'])
+
+if uploaded_file is not None:
+    image = Image.open(uploaded_file)
+    st.image(image, caption="元の画像", width=400)
+    st.divider()
+
+    cols = st.columns(len(TARGET_SPECS))
+
+    for idx, (w, h, label_key) in enumerate(TARGET_SPECS):
+        
+        # 現在のフォーマットの設定を取得
+        current_set = all_format_configs[label_key]
+        img_settings = current_set['img']
+        text_settings_list = current_set['text']
+        
+        # --- 画像リサイズ処理（手動調整パラメータを適用） ---
+        processed_img = smart_resize(
+            image, 
+            w, h, 
+            zoom=img_settings['zoom'], 
+            shift_x=img_settings['shift_x'], 
+            shift_y=img_settings['shift_y']
+        )
+        
+        # --- 文字入れ処理 ---
+        for settings in text_settings_list:
+            if settings['text']: 
+                processed_img = add_text_layer(processed_img, settings)
+
+        with cols[idx]:
+            st.write(f"**{label_key}** ({w}x{h})")
+            st.image(processed_img, use_container_width=True)
+
+            if processed_img.mode in ("RGBA", "P"):
+                processed_img = processed_img.convert("RGB")
+
+            buf = io.BytesIO()
+            processed_img.save(buf, format="JPEG", quality=95)
+            
+            st.download_button(
+                label="📥 保存",
+                data=buf.getvalue(),
+                file_name=f"{label_key}_{w}x{h}.jpg",
+                mime="image/jpeg",
+                key=f"dl_{idx}"
+            )
