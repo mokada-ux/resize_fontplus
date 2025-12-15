@@ -61,26 +61,21 @@ def smart_resize(img_pil, target_width, target_height, zoom=1.0, shift_x=0, shif
     center_x_scaled = center_x * final_scale
     center_y_scaled = center_y * final_scale
     
-    # 切り抜き枠の左上座標（顔中心を基準に、ターゲットサイズの半分戻る）
-    # 手動シフト量を反映（画像が右に動く＝切り抜き枠は左に動く）
+    # 切り抜き枠の左上座標
     left = center_x_scaled - (target_width / 2) - shift_x
     top = center_y_scaled - (target_height / 2) - shift_y
     
-    # --- はみ出し防止処理（オプション：余白を許容するかどうか）---
-    # ここでは「画像が足りない部分は黒埋め」ではなく、可能な限り画像を埋める挙動にするが、
-    # ユーザーが自由に動かしたい場合は制限を緩める必要がある。
-    # 今回は「制限なし」で自由に動かせるようにclamp処理を少し緩める、あるいは外す。
-    # ただしPILのcropは範囲外を指定すると自動でパディングはしないため、貼り付け方式に変更。
-    
-    # 背景キャンバスを作成（黒背景）
-    canvas = Image.new("RGB", (target_width, target_height), (0, 0, 0))
-    
-    # 貼り付け位置の計算（crop座標の逆）
+    # 貼り付け位置の計算
     paste_x = int(-left)
     paste_y = int(-top)
     
+    # --- 背景キャンバスを作成 ---
+    # ★ここを変更しました★ (R, G, B) で色を指定します。
+    # 青色に変更: (0, 0, 255)
+    bg_color = (0, 0, 255) 
+    canvas = Image.new("RGB", (target_width, target_height), bg_color)
+    
     # キャンバスにリサイズ画像を貼り付け
-    # 画像の一部しかキャンバスに乗らない場合も考慮してpaste
     canvas.paste(img_resized, (paste_x, paste_y))
     
     return canvas
