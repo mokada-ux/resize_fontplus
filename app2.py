@@ -283,7 +283,7 @@ if os.path.exists(FONT_DIR):
 
 TARGET_SPECS = [
     (1080, 1080, "Square"),
-    (1920, 1080, "Wide"),
+    (1200, 628, "Wide"),
     (600, 400, "Banner")
 ]
 
@@ -295,7 +295,7 @@ with tab_sq:
     square_configs = render_text_settings_ui("sq", available_fonts, FONT_DIR)
 
 with tab_wd:
-    st.subheader("📺 Wide (1920x1080)")
+    st.subheader("📺 Wide (1200x628)")
     use_sq_for_wd = st.checkbox("🔗 Squareの設定をコピー", value=True, key="sync_wd")
     if use_sq_for_wd:
         st.info("Squareの設定を適用中。個別に変更したい場合はチェックを外してください。")
